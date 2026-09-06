@@ -1,0 +1,14 @@
+{
+  "name": "study-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Accounts and saved progress for the chemistry and geometry study sites. Cloudflare Workers + D1.",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:local": "wrangler d1 execute study --local --file schema.sql",
+    "db:remote": "wrangler d1 execute study --remote --file schema.sql"
+  },
+  "devDependencies": { "wrangler": "^4.0.0" }
+}

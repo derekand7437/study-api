@@ -1,0 +1,12 @@
+name = "study-api"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+# Origins allowed to call this API. Add your own if you move the sites.
+[vars]
+ALLOWED_ORIGINS = "https://derekand7437.github.io"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "study"
+database_id = "PASTE_AFTER_CREATE"   # wrangler d1 create study  prints this
