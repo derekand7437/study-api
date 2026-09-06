@@ -1,8 +1,10 @@
 /**
  * Password hashing for the Workers runtime, which has WebCrypto but not scrypt.
- * PBKDF2-SHA256, 210k iterations (OWASP's 2023 floor), random 16-byte salt.
+ * PBKDF2-SHA256 with a random 16-byte salt, at 100k iterations — the ceiling the Workers
+ * runtime allows (asking for more throws NotSupportedError). The count is stored inside the
+ * hash, so raising it later only affects new passwords; old ones keep verifying at theirs.
  */
-const ITERATIONS = 210_000;
+const ITERATIONS = 100_000;
 const enc = new TextEncoder();
 
 const b64 = bytes => btoa(String.fromCharCode(...new Uint8Array(bytes)));

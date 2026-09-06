@@ -49,8 +49,11 @@ To point a locally served site at it, add `?api=http://localhost:8787` to the pa
 
 ## Security
 
-Passwords are hashed with PBKDF2-SHA256 at 210,000 iterations and a random 16-byte salt,
-compared in constant time. Session tokens are 32 random bytes and are deleted on sign-out.
+Passwords are hashed with PBKDF2-SHA256 at 100,000 iterations and a random 16-byte salt,
+compared in constant time. 100,000 is the ceiling the Workers runtime allows — asking for
+more throws `NotSupportedError` — and the count is stored in the hash, so it can be raised
+later without invalidating existing passwords. Session tokens are 32 random bytes and are
+deleted on sign-out.
 
 CORS is closed by default: only the origins in `ALLOWED_ORIGINS` (in `wrangler.toml`) and
 `localhost` may call the API. Register is capped at 40 new accounts per hour per IP and
