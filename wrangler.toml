@@ -9,4 +9,4 @@ ALLOWED_ORIGINS = "https://derekand7437.github.io"
 [[d1_databases]]
 binding = "DB"
 database_name = "study"
-database_id = "PASTE_AFTER_CREATE"   # wrangler d1 create study  prints this
+database_id = "35b980b5-1e9b-4803-a45c-ee949d608049"
