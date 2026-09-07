@@ -58,3 +58,68 @@ export async function rateLimit(db, key, max = 10, windowMs = 60_000){
   await db.prepare("UPDATE throttle SET n = n + 1 WHERE k = ?").bind(key).run();
   return row.n + 1 <= max;
 }
+
+/* ---------- phone numbers and verification codes ---------- */
+
+/**
+ * Normalise to E.164, which is what an SMS gateway needs. A bare 10-digit number is
+ * assumed to be US — both sites are for one US high-school course.
+ */
+export function normalizePhone(raw){
+  if (typeof raw !== "string") return null;
+  const trimmed = raw.trim();
+  const plus = trimmed.startsWith("+");
+  const digits = trimmed.replace(/\D/g, "");
+  if (!digits) return null;
+  if (plus) return digits.length >= 8 && digits.length <= 15 ? "+" + digits : null;
+  if (digits.length === 10) return "+1" + digits;
+  if (digits.length === 11 && digits[0] === "1") return "+" + digits;
+  return digits.length >= 8 && digits.length <= 15 ? "+" + digits : null;
+}
+
+/** All the browser is ever told about a stored number. */
+export const phoneHint = e164 => "\u2022\u2022\u2022\u2022 " + String(e164).slice(-4);
+
+/** Six digits, uniformly distributed (reject the tail rather than take the modulo bias). */
+export function newCode(){
+  const max = Math.floor(0xFFFFFFFF / 1000000) * 1000000;
+  let n = crypto.getRandomValues(new Uint32Array(1))[0];
+  while (n >= max) n = crypto.getRandomValues(new Uint32Array(1))[0];
+  return String(n % 1000000).padStart(6, "0");
+}
+
+/**
+ * Codes are stored salted-and-hashed so a leaked table is not a list of live codes.
+ * SHA-256 rather than PBKDF2 on purpose: a six-digit code has too small a space for any
+ * hash to save it, so the real defences are the ten-minute expiry, the five-try limit and
+ * single use — and this runs on every verify, where PBKDF2 would burn the CPU budget.
+ */
+export async function hashCode(code, salt){
+  const bytes = new TextEncoder().encode(salt + ":" + code);
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+export function newSalt(){
+  return [...crypto.getRandomValues(new Uint8Array(16))].map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** Store as "salt$hash". */
+export async function sealCode(code){
+  const salt = newSalt();
+  return salt + "$" + await hashCode(code, salt);
+}
+
+export async function checkCode(code, stored){
+  const [salt, want] = String(stored).split("$");
+  if (!salt || !want) return false;
+  const got = await hashCode(code, salt);
+  if (got.length !== want.length) return false;
+  let diff = 0;
+  for (let i = 0; i < got.length; i++) diff |= got.charCodeAt(i) ^ want.charCodeAt(i);
+  return diff === 0;
+}
+
+export const CODE_TTL_MS = 10 * 60 * 1000;
+export const MAX_CODE_TRIES = 5;
+export const MAX_CODE_SENDS = 4;

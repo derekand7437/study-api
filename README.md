@@ -43,10 +43,39 @@ To point a locally served site at it, add `?api=http://localhost:8787` to the pa
 | GET | `/api/health` | is the backend up |
 | POST | `/api/register` · `/login` · `/logout` | accounts |
 | GET | `/api/me` | who am I |
+| POST | `/api/verify` | step two: the texted code |
+| POST | `/api/resend` | text the code again |
 | GET/PUT | `/api/prefs` | appearance settings, shared by both subjects |
 | GET/PUT | `/api/progress/:subject` | saved progress (`chemistry` or `geometry`) |
 | POST | `/api/attempts` | log answered problems, in batches |
 | GET | `/api/stats` | progress, accuracy by topic, last 30 days |
+
+## Two-step verification
+
+Signing up asks for a phone number; signing in asks for the code texted to it. The password
+alone never returns a session — it returns a short-lived challenge, and only the right code
+turns that into a token. A signup is not an account until its number is verified, so an
+abandoned one leaves nothing behind.
+
+Workers cannot send SMS, so this needs Twilio (or any provider you adapt `src/sms.js` to).
+**Until those three secrets exist the code step is switched off** and signup and login stay
+one step — a code step with no way to deliver a code would lock everyone out. Phone numbers
+are collected either way.
+
+```bash
+npx wrangler secret put TWILIO_SID
+npx wrangler secret put TWILIO_TOKEN
+npx wrangler secret put TWILIO_FROM     # your Twilio number, e.g. +15551234567
+npx wrangler deploy
+```
+
+`GET /api/health` reports `twoFactor: true` once it is live. Texts are not free — Twilio
+charges per message, and a trial account can only text numbers you have verified with them.
+
+Codes are six digits, expire in ten minutes, are single use, allow five wrong guesses before
+they are burned, and can be re-sent four times. They are stored salted and hashed, so the
+table is not a list of live codes. The number is never sent back to the browser — only a
+`•••• 1234` hint.
 
 ## Security
 

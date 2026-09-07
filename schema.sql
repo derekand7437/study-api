@@ -3,7 +3,32 @@ CREATE TABLE IF NOT EXISTS users (
   id       INTEGER PRIMARY KEY AUTOINCREMENT,
   username TEXT NOT NULL UNIQUE COLLATE NOCASE,
   pass     TEXT NOT NULL,
+  phone    TEXT,
   created  TEXT NOT NULL
+);
+
+-- A signup is not a user until its phone is verified, so it waits here first.
+CREATE TABLE IF NOT EXISTS pending_signups (
+  id       TEXT PRIMARY KEY,
+  username TEXT NOT NULL,
+  pass     TEXT NOT NULL,
+  phone    TEXT NOT NULL,
+  code     TEXT NOT NULL,
+  tries    INTEGER NOT NULL DEFAULT 0,
+  sends    INTEGER NOT NULL DEFAULT 1,
+  expires  INTEGER NOT NULL,
+  created  TEXT NOT NULL
+);
+
+-- A correct password only gets you one of these; the session comes after the code.
+CREATE TABLE IF NOT EXISTS login_challenges (
+  id      TEXT PRIMARY KEY,
+  user_id INTEGER NOT NULL,
+  code    TEXT NOT NULL,
+  tries   INTEGER NOT NULL DEFAULT 0,
+  sends   INTEGER NOT NULL DEFAULT 1,
+  expires INTEGER NOT NULL,
+  created TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
   token   TEXT PRIMARY KEY,

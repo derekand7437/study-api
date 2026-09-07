@@ -4,7 +4,10 @@
  * Serves both subject sites, which live on the same origin (GitHub Pages), so one account
  * and one sign-in covers chemistry and geometry together.
  */
-import { hashPassword, verifyPassword, newToken, validateCredentials, rateLimit } from "./auth.js";
+import { hashPassword, verifyPassword, newToken, validateCredentials, rateLimit,
+         normalizePhone, phoneHint, newCode, sealCode, checkCode,
+         CODE_TTL_MS, MAX_CODE_TRIES, MAX_CODE_SENDS } from "./auth.js";
+import { configured as smsConfigured, sendCode } from "./sms.js";
 
 const SUBJECTS = new Set(["chemistry", "geometry"]);
 const MAX_BODY = 256 * 1024;
@@ -54,6 +57,22 @@ async function userFor(db, token){
   ).bind(token).first();
 }
 
+
+/** A verified signup becomes a user and a session in one go. */
+async function finishSignup(db, username, pass, phone, now, out, status){
+  await db.prepare("INSERT INTO users (username, pass, phone, created) VALUES (?, ?, ?, ?)")
+    .bind(username, pass, phone, now).run();
+  const user = await db.prepare("SELECT id, username, created FROM users WHERE username = ?").bind(username).first();
+  return issueSession(db, user, out, status);
+}
+
+async function issueSession(db, user, out, status){
+  const token = newToken();
+  await db.prepare("INSERT INTO sessions (token, user_id, created) VALUES (?, ?, ?)")
+    .bind(token, user.id, new Date().toISOString()).run();
+  return out(status, { token, user: { id: user.id, username: user.username, created: user.created } });
+}
+
 export default {
   async fetch(request, env){
     const url = new URL(request.url);
@@ -68,26 +87,39 @@ export default {
 
     try {
       if (path === "/health" && request.method === "GET")
-        return out(200, { ok: true, subjects: [...SUBJECTS] });
+        return out(200, { ok: true, subjects: [...SUBJECTS], twoFactor: smsConfigured(env) });
 
       /* ---------- accounts ---------- */
       if (path === "/register" && request.method === "POST"){
         // a whole class often shares one school IP, so this is generous by design
         if (!await rateLimit(db, "reg:" + ip, 40, 3_600_000))
           return out(429, { error: "Too many new accounts from here just now. Try again later." });
-        const { username, password } = await readBody(request);
+        const { username, password, phone } = await readBody(request);
         const bad = validateCredentials(username, password);
         if (bad) return out(400, { error: bad });
+
+        const e164 = normalizePhone(phone);
+        if (!e164) return out(400, { error: "Enter a phone number that can receive texts." });
+
         if (await db.prepare("SELECT id FROM users WHERE username = ?").bind(username).first())
           return out(409, { error: "That username is taken." });
 
         const now = new Date().toISOString();
-        await db.prepare("INSERT INTO users (username, pass, created) VALUES (?, ?, ?)")
-          .bind(username, await hashPassword(password), now).run();
-        const user = await db.prepare("SELECT id, username, created FROM users WHERE username = ?").bind(username).first();
-        const token = newToken();
-        await db.prepare("INSERT INTO sessions (token, user_id, created) VALUES (?, ?, ?)").bind(token, user.id, now).run();
-        return out(201, { token, user });
+        const pass = await hashPassword(password);
+
+        // Without an SMS provider there is no way to prove the number, so keep the old
+        // one-step signup rather than a code step nobody could complete.
+        if (!smsConfigured(env)) return finishSignup(db, username, pass, e164, now, out, 201);
+
+        const code = newCode();
+        const sent = await sendCode(env, e164, code);
+        if (!sent.ok) return out(502, { error: sent.error });
+
+        const id = newToken();
+        await db.prepare(`INSERT INTO pending_signups (id, username, pass, phone, code, expires, created)
+                          VALUES (?, ?, ?, ?, ?, ?, ?)`)
+          .bind(id, username, pass, e164, await sealCode(code), Date.now() + CODE_TTL_MS, now).run();
+        return out(202, { pending: id, phoneHint: phoneHint(e164) });
       }
 
       if (path === "/login" && request.method === "POST"){
@@ -99,10 +131,102 @@ export default {
         const row = await db.prepare("SELECT * FROM users WHERE username = ?").bind(username).first();
         if (!row || !await verifyPassword(password, row.pass))
           return out(401, { error: "Wrong username or password." });
-        const token = newToken();
-        await db.prepare("INSERT INTO sessions (token, user_id, created) VALUES (?, ?, ?)")
-          .bind(token, row.id, new Date().toISOString()).run();
-        return out(200, { token, user: { id: row.id, username: row.username, created: row.created } });
+
+        // Second step, when there is a number to text and a way to text it.
+        if (smsConfigured(env) && row.phone){
+          const code = newCode();
+          const sent = await sendCode(env, row.phone, code);
+          if (!sent.ok) return out(502, { error: sent.error });
+          const id = newToken();
+          await db.prepare(`INSERT INTO login_challenges (id, user_id, code, expires, created)
+                            VALUES (?, ?, ?, ?, ?)`)
+            .bind(id, row.id, await sealCode(code), Date.now() + CODE_TTL_MS, new Date().toISOString()).run();
+          return out(202, { challenge: id, phoneHint: phoneHint(row.phone) });
+        }
+
+        return issueSession(db, row, out, 200);
+      }
+
+      /* ---------- step two: the code ---------- */
+      if (path === "/verify" && request.method === "POST"){
+        if (!await rateLimit(db, "verify:" + ip, 60, 300_000))
+          return out(429, { error: "Too many attempts. Wait a few minutes." });
+        const { pending, challenge, code } = await readBody(request);
+        if (typeof code !== "string" || !/^\d{4,8}$/.test(code.trim()))
+          return out(400, { error: "Enter the code from the text." });
+        const entered = code.trim();
+
+        if (pending){
+          const row = await db.prepare("SELECT * FROM pending_signups WHERE id = ?").bind(pending).first();
+          if (!row) return out(404, { error: "That code has expired. Start again." });
+          if (Date.now() > row.expires){
+            await db.prepare("DELETE FROM pending_signups WHERE id = ?").bind(pending).run();
+            return out(410, { error: "That code has expired. Start again." });
+          }
+          if (!await checkCode(entered, row.code)){
+            const tries = row.tries + 1;
+            if (tries >= MAX_CODE_TRIES){
+              await db.prepare("DELETE FROM pending_signups WHERE id = ?").bind(pending).run();
+              return out(429, { error: "Too many wrong codes. Start again." });
+            }
+            await db.prepare("UPDATE pending_signups SET tries = ? WHERE id = ?").bind(tries, pending).run();
+            return out(401, { error: `That code is not right. ${MAX_CODE_TRIES - tries} tries left.` });
+          }
+          // Single use, and the username could have been taken while the code was in flight.
+          await db.prepare("DELETE FROM pending_signups WHERE id = ?").bind(pending).run();
+          if (await db.prepare("SELECT id FROM users WHERE username = ?").bind(row.username).first())
+            return out(409, { error: "That username was taken while you were verifying." });
+          return finishSignup(db, row.username, row.pass, row.phone, new Date().toISOString(), out, 201);
+        }
+
+        if (challenge){
+          const row = await db.prepare("SELECT * FROM login_challenges WHERE id = ?").bind(challenge).first();
+          if (!row) return out(404, { error: "That code has expired. Sign in again." });
+          if (Date.now() > row.expires){
+            await db.prepare("DELETE FROM login_challenges WHERE id = ?").bind(challenge).run();
+            return out(410, { error: "That code has expired. Sign in again." });
+          }
+          if (!await checkCode(entered, row.code)){
+            const tries = row.tries + 1;
+            if (tries >= MAX_CODE_TRIES){
+              await db.prepare("DELETE FROM login_challenges WHERE id = ?").bind(challenge).run();
+              return out(429, { error: "Too many wrong codes. Sign in again." });
+            }
+            await db.prepare("UPDATE login_challenges SET tries = ? WHERE id = ?").bind(tries, challenge).run();
+            return out(401, { error: `That code is not right. ${MAX_CODE_TRIES - tries} tries left.` });
+          }
+          await db.prepare("DELETE FROM login_challenges WHERE id = ?").bind(challenge).run();
+          const user = await db.prepare("SELECT id, username, created FROM users WHERE id = ?").bind(row.user_id).first();
+          if (!user) return out(404, { error: "That account is gone." });
+          return issueSession(db, user, out, 200);
+        }
+
+        return out(400, { error: "Nothing to verify." });
+      }
+
+      /* ---------- send it again ---------- */
+      if (path === "/resend" && request.method === "POST"){
+        if (!await rateLimit(db, "resend:" + ip, 20, 300_000))
+          return out(429, { error: "Too many texts requested. Wait a few minutes." });
+        const { pending, challenge } = await readBody(request);
+        const table = pending ? "pending_signups" : challenge ? "login_challenges" : null;
+        const id = pending || challenge;
+        if (!table) return out(400, { error: "Nothing to resend." });
+
+        const row = await db.prepare(`SELECT * FROM ${table} WHERE id = ?`).bind(id).first();
+        if (!row || Date.now() > row.expires) return out(404, { error: "That code has expired. Start again." });
+        if (row.sends >= MAX_CODE_SENDS) return out(429, { error: "That is as many texts as we can send. Start again." });
+
+        const to = pending ? row.phone
+          : (await db.prepare("SELECT phone FROM users WHERE id = ?").bind(row.user_id).first() || {}).phone;
+        if (!to) return out(404, { error: "No number on file." });
+
+        const code = newCode();
+        const sent = await sendCode(env, to, code);
+        if (!sent.ok) return out(502, { error: sent.error });
+        await db.prepare(`UPDATE ${table} SET code = ?, tries = 0, sends = ?, expires = ? WHERE id = ?`)
+          .bind(await sealCode(code), row.sends + 1, Date.now() + CODE_TTL_MS, id).run();
+        return out(200, { ok: true, phoneHint: phoneHint(to) });
       }
 
       if (path === "/logout" && request.method === "POST"){
