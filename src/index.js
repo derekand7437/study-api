@@ -99,7 +99,13 @@ export default {
         if (bad) return out(400, { error: bad });
 
         const e164 = normalizePhone(phone);
-        if (!e164) return out(400, { error: "Enter a phone number that can receive texts." });
+        if (!e164){
+          // A cached older copy of the page has no phone box at all, so "enter a phone
+          // number" would be impossible to act on. Say what will actually fix it.
+          return out(400, { error: phone === undefined
+            ? "This page is out of date. Reload it and try again \u2014 pull down to refresh on a phone, or Ctrl+Shift+R (\u2318\u21e7R on a Mac)."
+            : "Enter a phone number that can receive texts." });
+        }
 
         if (await db.prepare("SELECT id FROM users WHERE username = ?").bind(username).first())
           return out(409, { error: "That username is taken." });
