@@ -98,13 +98,20 @@ export default {
         const bad = validateCredentials(username, password);
         if (bad) return out(400, { error: bad });
 
-        const e164 = normalizePhone(phone);
-        if (!e164){
-          // A cached older copy of the page has no phone box at all, so "enter a phone
-          // number" would be impossible to act on. Say what will actually fix it.
-          return out(400, { error: phone === undefined
-            ? "This page is out of date. Reload it and try again \u2014 pull down to refresh on a phone, or Ctrl+Shift+R (\u2318\u21e7R on a Mac)."
-            : "Enter a phone number that can receive texts." });
+        // A number is only worth asking for if it can actually be texted. With no SMS
+        // provider there is no code to send and no reason to hold someone's phone number,
+        // so signup is username and password and nothing is collected.
+        const wantsPhone = smsConfigured(env);
+        let e164 = null;
+        if (wantsPhone){
+          e164 = normalizePhone(phone);
+          if (!e164){
+            // A cached older copy of the page has no phone box at all, so "enter a phone
+            // number" would be impossible to act on. Say what will actually fix it.
+            return out(400, { error: phone === undefined
+              ? "This page is out of date. Reload it and try again \u2014 pull down to refresh on a phone, or Ctrl+Shift+R (\u2318\u21e7R on a Mac)."
+              : "Enter a phone number that can receive texts." });
+          }
         }
 
         if (await db.prepare("SELECT id FROM users WHERE username = ?").bind(username).first())
@@ -113,9 +120,7 @@ export default {
         const now = new Date().toISOString();
         const pass = await hashPassword(password);
 
-        // Without an SMS provider there is no way to prove the number, so keep the old
-        // one-step signup rather than a code step nobody could complete.
-        if (!smsConfigured(env)) return finishSignup(db, username, pass, e164, now, out, 201);
+        if (!wantsPhone) return finishSignup(db, username, pass, null, now, out, 201);
 
         const code = newCode();
         const sent = await sendCode(env, e164, code);
