@@ -43,6 +43,7 @@ To point a locally served site at it, add `?api=http://localhost:8787` to the pa
 | GET | `/api/health` | is the backend up |
 | POST | `/api/register` · `/login` · `/logout` | accounts |
 | GET | `/api/me` | who am I |
+| GET/PUT | `/api/prefs` | appearance settings, shared by both subjects |
 | GET/PUT | `/api/progress/:subject` | saved progress (`chemistry` or `geometry`) |
 | POST | `/api/attempts` | log answered problems, in batches |
 | GET | `/api/stats` | progress, accuracy by topic, last 30 days |

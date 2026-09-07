@@ -117,6 +117,26 @@ export default {
       if (path === "/me" && request.method === "GET")
         return user ? out(200, { user }) : need();
 
+      /* ---------- appearance settings, shared by both subjects ---------- */
+      if (path === "/prefs"){
+        if (!user) return need();
+
+        if (request.method === "GET"){
+          const row = await db.prepare("SELECT data, updated FROM prefs WHERE user_id = ?").bind(user.id).first();
+          return out(200, { data: row ? JSON.parse(row.data) : null, updated: row ? row.updated : null });
+        }
+        if (request.method === "PUT"){
+          const { data } = await readBody(request);
+          if (!data || typeof data !== "object" || Array.isArray(data))
+            return out(400, { error: "Expected a settings object." });
+          const updated = new Date().toISOString();
+          await db.prepare(`INSERT INTO prefs (user_id, data, updated) VALUES (?, ?, ?)
+            ON CONFLICT(user_id) DO UPDATE SET data = excluded.data, updated = excluded.updated`)
+            .bind(user.id, JSON.stringify(data), updated).run();
+          return out(200, { ok: true, updated });
+        }
+      }
+
       /* ---------- progress ---------- */
       const prog = path.match(/^\/progress\/([a-z]+)$/);
       if (prog){

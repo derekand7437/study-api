@@ -17,6 +17,11 @@ CREATE TABLE IF NOT EXISTS progress (
   updated TEXT NOT NULL,
   PRIMARY KEY (user_id, subject)
 );
+CREATE TABLE IF NOT EXISTS prefs (
+  user_id INTEGER PRIMARY KEY,
+  data    TEXT NOT NULL,
+  updated TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS attempts (
   id      INTEGER PRIMARY KEY AUTOINCREMENT,
   user_id INTEGER NOT NULL,
