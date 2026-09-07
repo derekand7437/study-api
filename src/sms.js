@@ -30,10 +30,25 @@ export async function sendCode(env, to, code){
       body
     });
     if (res.ok) return { ok: true };
+
     const detail = await res.text();
-    console.error("sms send failed:", res.status, detail.slice(0, 300));
-    // Never echo the provider's message back to the browser: it leaks account details.
-    return { ok: false, error: "Could not send the code. Check the number and try again." };
+    console.error("sms send failed:", res.status, detail.slice(0, 400));
+
+    // Twilio's own message can name the account, so it is never passed straight through.
+    // These are the setup mistakes that actually happen, turned into something actionable.
+    let code = 0;
+    try { code = Number(JSON.parse(detail).code) || 0; } catch {}
+    const known = {
+      20003: "The texting account is not set up correctly (its credentials were rejected).",
+      21608: "This number has not been verified with the texting account yet. On a Twilio trial you can only text numbers you have verified in the Twilio console.",
+      21211: "That does not look like a real phone number.",
+      21214: "That does not look like a real phone number.",
+      21606: "The texting account's own number is not set up correctly.",
+      21612: "That number cannot be texted from this account.",
+      21614: "That number cannot receive text messages \u2014 try a mobile number.",
+      21610: "That number has replied STOP, so it cannot be texted."
+    };
+    return { ok: false, error: known[code] || "Could not send the code. Check the number and try again." };
   } catch (err){
     console.error("sms send threw:", err);
     return { ok: false, error: "Could not send the code just now." };

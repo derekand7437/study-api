@@ -62,12 +62,31 @@ Workers cannot send SMS, so this needs Twilio (or any provider you adapt `src/sm
 one step — a code step with no way to deliver a code would lock everyone out. Phone numbers
 are collected either way.
 
+### Turning texting on
+
+1. Make a Twilio account at <https://www.twilio.com/try-twilio> and get a phone number
+   (Develop → Phone Numbers → Buy a number; a trial comes with credit for one).
+2. From the console dashboard copy the **Account SID** and **Auth Token**.
+3. Run these in `~/study-api`, pasting each value when prompted:
+
 ```bash
-npx wrangler secret put TWILIO_SID
+npx wrangler secret put TWILIO_SID       # starts with AC
 npx wrangler secret put TWILIO_TOKEN
-npx wrangler secret put TWILIO_FROM     # your Twilio number, e.g. +15551234567
+npx wrangler secret put TWILIO_FROM      # your Twilio number, e.g. +15551234567
 npx wrangler deploy
 ```
+
+4. Check it took:
+
+```bash
+curl -s https://study-api.study-api.workers.dev/api/health
+# {"ok":true,...,"twoFactor":true}
+```
+
+**A trial account can only text numbers you have verified with Twilio** (console →
+Phone Numbers → Verified Caller IDs). That is fine for testing on your own phone; texting
+classmates needs the account upgraded. If a send fails, the API says why — an unverified
+number, bad credentials and a landline all give their own message.
 
 `GET /api/health` reports `twoFactor: true` once it is live. Texts are not free — Twilio
 charges per message, and a trial account can only text numbers you have verified with them.
